@@ -464,4 +464,5 @@ function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-server.listen(PORT, () => console.log(`nebula hub: порт ${PORT}, данные в ${DATA_DIR}`));
+// HOST — если хостинг разрешает слушать только свой адрес (иначе все адреса).
+server.listen(PORT, process.env.HOST || undefined, () => console.log(`nebula hub: порт ${PORT}, данные в ${DATA_DIR}`));
