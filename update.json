@@ -1,17 +1,17 @@
 {
   "file": "nebula-dlc-1.0.2.jar",
-  "url": "https://github.com/s3lfcode1337-lang/nebula-launcher/releases/download/dlc/nebula-dlc-1.0.2-b40464de.jar",
-  "sha1": "b40464de257fb59975917d3b799b4e8b1f33ec67",
+  "url": "https://github.com/s3lfcode1337-lang/nebula-launcher/releases/download/dlc/nebula-dlc-1.0.2-3900dc72.jar",
+  "sha1": "3900dc72bdb70124ba139b00ff89ec51c0f1f096",
   "versions": {
     "1.21.4": {
       "file": "nebula-dlc-1.0.2.jar",
-      "url": "https://github.com/s3lfcode1337-lang/nebula-launcher/releases/download/dlc/nebula-dlc-1.0.2-b40464de.jar",
-      "sha1": "b40464de257fb59975917d3b799b4e8b1f33ec67"
+      "url": "https://github.com/s3lfcode1337-lang/nebula-launcher/releases/download/dlc/nebula-dlc-1.0.2-3900dc72.jar",
+      "sha1": "3900dc72bdb70124ba139b00ff89ec51c0f1f096"
     },
     "1.21.11": {
       "file": "nebula-dlc-1.0.2+1.21.11.jar",
-      "url": "https://github.com/s3lfcode1337-lang/nebula-launcher/releases/download/dlc/nebula-dlc-1.0.2-1.21.11-4f8c9ed2.jar",
-      "sha1": "4f8c9ed2d7af377c55253c6249fda1feb0285f5a"
+      "url": "https://github.com/s3lfcode1337-lang/nebula-launcher/releases/download/dlc/nebula-dlc-1.0.2-1.21.11-7975e446.jar",
+      "sha1": "7975e446873b518ce57938c9a4e8e038c388f0ab"
     }
   }
 }
