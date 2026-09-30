@@ -464,5 +464,7 @@ function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-// HOST — если хостинг разрешает слушать только свой адрес (иначе все адреса).
-server.listen(PORT, process.env.HOST || undefined, () => console.log(`nebula hub: порт ${PORT}, данные в ${DATA_DIR}`));
+// HOST (на alwaysdata — IP) — если хостинг разрешает слушать только свой адрес
+// (иначе все адреса). alwaysdata требует слушать ровно IP и PORT из окружения.
+const LISTEN_HOST = process.env.HOST || process.env.IP || undefined;
+server.listen(PORT, LISTEN_HOST, () => console.log(`nebula hub: ${LISTEN_HOST || "*"}:${PORT}, данные в ${DATA_DIR}`));
