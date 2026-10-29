@@ -1,3 +1,3 @@
 version=1.0.6
 url=https://github.com/s3lfcode1337-lang/nebula-launcher/releases/download/1.0.6/nebula-launcher-1.0.6-windows-x64.zip
-sha1=3870b289a2170487ef7c7334657eb13356c62e14
+sha1=3696c407b2df7590440cdb1daa47f19d4955d7ff
