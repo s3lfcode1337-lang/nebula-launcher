@@ -1,3 +1,3 @@
-version=1.0.10
-url=https://github.com/s3lfcode1337-lang/nebula-launcher/releases/download/1.0.10/nebula-launcher-1.0.10-windows-x64.zip
-sha1=fbb952f1a28de3289b155e9a7a53c0ed498b1602
+version=1.0.11
+url=https://github.com/s3lfcode1337-lang/nebula-launcher/releases/download/1.0.11/nebula-launcher-1.0.11-windows-x64.zip
+sha1=555ebb60bd9093345de5ff3bbe2d08da63cf3cf3
