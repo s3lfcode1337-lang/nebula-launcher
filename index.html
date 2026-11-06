@@ -46,7 +46,6 @@ img{display:block;max-width:100%}
 @keyframes grain{0%{transform:translate(0,0)}20%{transform:translate(-3%,2%)}40%{transform:translate(2%,-4%)}60%{transform:translate(-4%,-1%)}80%{transform:translate(3%,3%)}100%{transform:translate(0,0)}}
 
 .wrap{width:100%;max-width:var(--wrap);margin:0 auto;padding:0 var(--gutter)}
-.mono{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
 .serif{font-family:var(--serif);font-weight:400;letter-spacing:-.01em}
 
 /* ── Навигация ─────────────────────────────────────────── */
@@ -60,7 +59,7 @@ img{display:block;max-width:100%}
 .links a{transition:color .2s}
 .links a:hover{color:var(--ink)}
 .nav-right{display:flex;align-items:center;gap:14px}
-.ver{font-family:var(--mono);font-size:11px;color:var(--ink-3);border:1px solid var(--line-2);border-radius:99px;padding:4px 10px}
+.ver{font-size:12px;font-weight:500;color:var(--ink-3);border:1px solid var(--line-2);border-radius:99px;padding:4px 10px}
 
 .btn{display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 18px;border-radius:99px;font-size:14px;font-weight:500;transition:transform .2s, background .2s, box-shadow .2s, border-color .2s;white-space:nowrap}
 .btn svg{width:14px;height:14px;transition:transform .2s}
@@ -77,12 +76,11 @@ img{display:block;max-width:100%}
 .hero h1 em{font-style:italic;background:linear-gradient(180deg,#fff 20%,#9cc9ff 120%);-webkit-background-clip:text;background-clip:text;color:transparent;padding-right:.06em}
 .hero p.lead{max-width:520px;margin:26px auto 0;color:var(--ink-2);font-size:16px;position:relative;z-index:2}
 .hero .cta{display:flex;gap:12px;justify-content:center;margin-top:34px;position:relative;z-index:2;flex-wrap:wrap}
-.hero .specs{margin-top:28px;position:relative;z-index:2;display:flex;gap:18px;justify-content:center;flex-wrap:wrap}
-.hero .specs span{display:inline-flex;align-items:center;gap:7px}
+.hero .specs{margin-top:28px;position:relative;z-index:2;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;font-size:13px;color:var(--ink-2)}
+.hero .specs span{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:99px;background:rgba(255,255,255,.04);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
 .hero .specs i{width:5px;height:5px;border-radius:50%;background:var(--good);box-shadow:0 0 8px var(--good)}
 .horizon{position:absolute;left:50%;bottom:70px;transform:translateX(-50%);width:min(980px,92vw);height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.6),transparent);z-index:2}
 .horizon::after{content:"";position:absolute;left:50%;top:-30px;transform:translateX(-50%);width:60%;height:60px;background:radial-gradient(ellipse at center,rgba(156,201,255,.25),transparent 70%);filter:blur(6px)}
-.scroll-hint{position:absolute;bottom:26px;left:50%;transform:translateX(-50%);z-index:2}
 
 /* Парящие панели HUD за заголовком */
 .float-hud{position:absolute;inset:0;z-index:1;pointer-events:none}
@@ -153,8 +151,6 @@ section{position:relative}
 .frame-top{position:relative;height:1px;background:var(--line)}
 .frame-top .cap{position:absolute;top:-1px;width:7px;height:7px;background:#fff;box-shadow:0 0 10px rgba(255,255,255,.8)}
 .frame-top .cap.l{left:-4px;top:-3px}.frame-top .cap.r{right:-4px;top:-3px}
-.frame-top .lab{position:absolute;top:10px}
-.frame-top .lab.l{left:14px}.frame-top .lab.r{right:14px}
 .cross{position:absolute;width:11px;height:11px;pointer-events:none;opacity:.45}
 .cross::before,.cross::after{content:"";position:absolute;background:#fff}
 .cross::before{left:5px;top:0;width:1px;height:11px}
@@ -162,7 +158,6 @@ section{position:relative}
 
 .sec{padding:120px 0}
 .sec-head{text-align:center;max-width:680px;margin:0 auto 64px}
-.sec-head .mono{display:block;margin-bottom:18px}
 .sec-head h2{font-family:var(--serif);font-weight:400;font-size:clamp(40px,6vw,68px);line-height:1;letter-spacing:-.02em}
 .sec-head h2 em{font-style:italic;color:var(--accent-2)}
 .sec-head p{color:var(--ink-2);margin-top:18px;font-size:16px}
@@ -175,8 +170,7 @@ section{position:relative}
 .card.full{grid-column:span 4}
 .card .vis{flex:1;position:relative;display:grid;place-items:center;overflow:hidden;min-height:200px}
 .card .txt{padding:0 22px 22px;position:relative}
-.card .txt .n{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-right:10px}
-.card .txt h3{display:inline;font-weight:500;font-size:15px}
+.card .txt h3{font-weight:500;font-size:15px}
 .card .txt p{color:var(--ink-3);font-size:14px;margin-top:6px;max-width:440px}
 .card::after{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(500px circle at var(--mx,50%) var(--my,0%),rgba(156,201,255,.07),transparent 40%);opacity:0;transition:opacity .3s}
 .card:hover::after{opacity:1}
@@ -229,7 +223,7 @@ section{position:relative}
 /* fps */
 .fps{width:86%;max-width:420px}
 .fps .big{font-family:var(--serif);font-size:64px;line-height:1}
-.fps .big small{font-family:var(--mono);font-size:12px;color:var(--ink-3);margin-left:8px;letter-spacing:.05em}
+.fps .big small{font-family:var(--sans);font-size:14px;font-weight:500;color:var(--ink-3);margin-left:8px}
 .fps svg{width:100%;height:90px;margin-top:10px;overflow:visible}
 
 /* ── HUD-витрина ────────────────────────────────────────── */
@@ -243,7 +237,6 @@ section{position:relative}
 .stage .cross-hair::before,.stage .cross-hair::after{content:"";position:absolute;background:rgba(255,255,255,.85);border-radius:1px}
 .stage .cross-hair::before{left:8px;top:0;width:2px;height:18px}
 .stage .cross-hair::after{top:8px;left:0;height:2px;width:18px}
-.stage .label{position:absolute;font-family:var(--mono);font-size:10px;color:var(--ink-3);letter-spacing:.06em;text-transform:uppercase}
 .hud-notes{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;margin-top:14px;border-radius:16px;overflow:hidden;background:var(--line)}
 .hud-notes div{background:#050506;padding:20px}
 .hud-notes b{display:block;font-weight:500;margin-bottom:4px}
@@ -267,7 +260,6 @@ section{position:relative}
 .mod b{font-weight:500;font-size:14px;display:block}
 .mod span{color:var(--ink-3);font-size:13px;line-height:1.45;display:block;margin-top:2px}
 .mods .empty{grid-column:1/-1;text-align:center;color:var(--ink-3);padding:40px}
-.count{margin-top:18px;text-align:center}
 
 /* ── Скачать ────────────────────────────────────────────── */
 .dl{display:grid;grid-template-columns:1.25fr 1fr;gap:14px}
@@ -280,12 +272,13 @@ section{position:relative}
 .dl-main .logo-big{position:absolute;right:-40px;bottom:-50px;width:260px;opacity:.09;filter:blur(1px)}
 .steps{border-radius:22px;padding:26px;background:rgba(12,13,16,.88);box-shadow:inset 0 0 0 1px rgba(255,255,255,.07);display:flex;flex-direction:column;gap:18px}
 .step{display:flex;gap:14px}
-.step .k{font-family:var(--mono);font-size:11px;color:var(--ink);width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
+.step .k{font-size:12px;font-weight:600;color:var(--ink);width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
 .step b{font-weight:500;display:block}
 .step span{color:var(--ink-3);font-size:13px}
 .req{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;border-radius:16px;overflow:hidden;background:var(--line);margin-top:14px}
 .req div{background:#050506;padding:18px 20px}
-.req .mono{display:block;margin-bottom:6px}
+.req span{display:block;margin-bottom:5px;font-size:13px;color:var(--ink-3)}
+.tag{display:inline-flex;align-items:center;font-size:12.5px;font-weight:500;color:var(--ink-2);padding:5px 11px;border-radius:99px;background:rgba(255,255,255,.06);box-shadow:inset 0 0 0 1px rgba(255,255,255,.09)}
 .req b{font-weight:500}
 
 /* ── FAQ ────────────────────────────────────────────────── */
@@ -294,10 +287,9 @@ section{position:relative}
 .q:hover{background:rgba(20,21,26,.92)}
 .q summary{list-style:none;display:flex;align-items:center;gap:14px;padding:16px 18px;cursor:pointer;font-weight:500;font-size:14px}
 .q summary::-webkit-details-marker{display:none}
-.q summary .mono{width:20px}
 .q summary .pl{margin-left:auto;width:22px;height:22px;border-radius:50%;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18);display:grid;place-items:center;transition:transform .3s;flex:none}
 .q[open] summary .pl{transform:rotate(45deg)}
-.q p{padding:0 18px 18px 52px;color:var(--ink-2);font-size:14px}
+.q p{padding:0 18px 18px 18px;color:var(--ink-2);font-size:14px}
 
 /* ── Подвал ─────────────────────────────────────────────── */
 footer{position:relative;padding:80px 0 40px;overflow:hidden}
@@ -374,7 +366,6 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
 <section class="hero">
   <div class="float-hud" id="floatHud" aria-hidden="true"></div>
 
-  <span class="mono rv" style="margin-bottom:26px;position:relative;z-index:2">Minecraft 1.21.4 · 1.21.11 · Fabric</span>
   <h1 class="rv d1">Космос<br><em>в каждом кадре</em></h1>
   <p class="lead rv d2">Nebula Visuals — визуальная модификация для Minecraft: стеклянный интерфейс с блюром, живой HUD, атмосфера мира и косметика, которую видят другие игроки Nebula.</p>
   <div class="cta rv d3">
@@ -382,13 +373,12 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 11 11 5M6 5h5v5"/></svg></a>
     <a class="btn ghost" href="#features">Смотреть возможности</a>
   </div>
-  <div class="specs mono rv d4">
+  <div class="specs rv d4">
     <span><i></i>Обновляется сам</span>
+    <span>Minecraft 1.21.4 и 1.21.11</span>
     <span>60+ функций</span>
-    <span>Windows x64</span>
   </div>
   <div class="horizon" aria-hidden="true"></div>
-  <span class="mono scroll-hint">Scroll ↓</span>
 </section>
 
 <!-- ═════════ TICKER ═════════ -->
@@ -399,11 +389,10 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
 <!-- ═════════ FEATURES ═════════ -->
 <section id="features">
   <div class="frame">
-    <div class="frame-top"><i class="cap l"></i><i class="cap r"></i><span class="mono lab l">Hue 0.58</span><span class="mono lab r">01 · Features</span></div>
+    <div class="frame-top"><i class="cap l"></i><i class="cap r"></i></div>
     <span class="cross" style="left:-6px;top:42%"></span><span class="cross" style="right:-6px;top:72%"></span>
     <div class="wrap sec">
       <div class="sec-head">
-        <span class="mono rv">01 · Возможности</span>
         <h2 class="rv d1">Всё, что видно,<br><em>сделано красиво</em></h2>
         <p class="rv d2">От меню до последней панели HUD — один стеклянный стиль, плавные анимации и цвет темы, который ты выбираешь сам.</p>
       </div>
@@ -429,7 +418,7 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
               </div>
             </div>
           </div>
-          <div class="txt"><span class="n">01</span><h3>Меню в стиле macOS</h3><p>Окно со стеклом и размытием мира за ним, поиск с опечатками и чужой раскладкой, светлое, тёмное и «Авто» оформление.</p></div>
+          <div class="txt"><h3>Меню в стиле macOS</h3><p>Окно со стеклом и размытием мира за ним, поиск с опечатками и чужой раскладкой, светлое, тёмное и «Авто» оформление.</p></div>
         </article>
 
         <article class="card rv d1">
@@ -439,7 +428,7 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
               <svg viewBox="0 0 300 90" preserveAspectRatio="none"><defs><linearGradient id="fg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9cc9ff" stop-opacity=".35"/><stop offset="1" stop-color="#9cc9ff" stop-opacity="0"/></linearGradient></defs><path id="fpsArea" fill="url(#fg)"/><path id="fpsLine" fill="none" stroke="#9cc9ff" stroke-width="1.5"/></svg>
             </div>
           </div>
-          <div class="txt"><span class="n">02</span><h3>Оптимизация</h3><p>Срезает то, что стоит кадров и не видно: далёкие метки, лишние частицы.</p></div>
+          <div class="txt"><h3>Оптимизация</h3><p>Срезает то, что стоит кадров и не видно: далёкие метки, лишние частицы.</p></div>
         </article>
 
         <article class="card rv">
@@ -448,7 +437,7 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
             <div class="fireflies" id="fireflies"></div>
             <div class="snowline"></div>
           </div>
-          <div class="txt"><span class="n">03</span><h3>Атмосфера</h3><p>Своё небо, туман, мокрый мир, снег на блоках, Новый год и светлячки.</p></div>
+          <div class="txt"><h3>Атмосфера</h3><p>Своё небо, туман, мокрый мир, снег на блоках, Новый год и светлячки.</p></div>
         </article>
 
         <article class="card rv d1">
@@ -459,14 +448,14 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
               <span class="chip"><em>🐾</em>Питомец</span><span class="chip"><em>🚗</em>Машина с котом</span><span class="chip"><em>🗡️</em>120 мечей</span>
             </div>
           </div>
-          <div class="txt"><span class="n">04</span><h3>Гардероб</h3><p>Косметика на игроке, которую видят все, кто играет с Nebula.</p></div>
+          <div class="txt"><h3>Гардероб</h3><p>Косметика на игроке, которую видят все, кто играет с Nebula.</p></div>
         </article>
 
         <article class="card rv d2">
           <div class="vis">
             <div class="net" id="net" aria-hidden="true"></div>
           </div>
-          <div class="txt"><span class="n">05</span><h3>Сеть Nebula</h3><p>Команда и метки по бинду, колесо эмоций, Portal Live с тиммейтом и значок у своих.</p></div>
+          <div class="txt"><h3>Сеть Nebula</h3><p>Команда и метки по бинду, колесо эмоций, Portal Live с тиммейтом и значок у своих.</p></div>
         </article>
       </div>
     </div>
@@ -476,11 +465,10 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
 <!-- ═════════ HUD ═════════ -->
 <section id="hud">
   <div class="frame">
-    <div class="frame-top"><i class="cap l"></i><i class="cap r"></i><span class="mono lab l">Blur 24 · R 9</span><span class="mono lab r">02 · HUD</span></div>
+    <div class="frame-top"><i class="cap l"></i><i class="cap r"></i></div>
     <span class="cross" style="left:-6px;top:30%"></span>
     <div class="wrap sec">
       <div class="sec-head">
-        <span class="mono rv">02 · HUD</span>
         <h2 class="rv d1">Панели, которые<br><em>не мешают в бою</em></h2>
         <p class="rv d2">Компактное стекло, которое видно краем глаза. Каждую панель можно двигать, масштабировать и выключать.</p>
       </div>
@@ -488,8 +476,6 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
       <div class="stage rv" id="stage">
         <div class="grid"></div>
         <div class="cross-hair"></div>
-        <span class="label" style="left:18px;bottom:14px">1920 × 1080</span>
-        <span class="label" style="right:18px;bottom:14px">Snap 8</span>
       </div>
 
       <div class="hud-notes">
@@ -505,11 +491,10 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
 <!-- ═════════ MODULES ═════════ -->
 <section id="modules">
   <div class="frame">
-    <div class="frame-top"><i class="cap l"></i><i class="cap r"></i><span class="mono lab l">Build 1.0.2</span><span class="mono lab r">03 · Modules</span></div>
+    <div class="frame-top"><i class="cap l"></i><i class="cap r"></i></div>
     <span class="cross" style="right:-6px;top:24%"></span>
     <div class="wrap sec">
       <div class="sec-head">
-        <span class="mono rv">03 · Функции</span>
         <h2 class="rv d1">Всё внутри<br><em>одного мода</em></h2>
         <p class="rv d2">Найди функцию так же, как в игре: по названию, по-русски или по первым буквам.</p>
       </div>
@@ -519,7 +504,6 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
       </div>
       <div class="mods" id="mods"></div>
       <div style="text-align:center;margin-top:22px"><button class="btn ghost" id="more" hidden>Показать все</button></div>
-      <p class="mono count" id="count"></p>
     </div>
   </div>
 </section>
@@ -527,16 +511,15 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
 <!-- ═════════ DOWNLOAD ═════════ -->
 <section id="download">
   <div class="frame">
-    <div class="frame-top"><i class="cap l"></i><i class="cap r"></i><span class="mono lab l">x64 · Windows</span><span class="mono lab r">04 · Download</span></div>
+    <div class="frame-top"><i class="cap l"></i><i class="cap r"></i></div>
     <div class="wrap sec">
       <div class="sec-head">
-        <span class="mono rv">04 · Скачать</span>
         <h2 class="rv d1">Три шага<br><em>до неба</em></h2>
       </div>
       <div class="dl">
         <div class="dl-main rv">
           <img class="logo-big" src="assets/logo.png" alt="">
-          <span class="mono" id="dlTag">Nebula Launcher</span>
+          <span class="tag" id="dlTag">Последняя версия</span>
           <h3 style="margin-top:14px">Nebula Launcher</h3>
           <p>Маленький загрузчик сам скачает лаунчер с Java и игрой, поставит мод нужной версии и будет обновлять всё, когда выходит новая сборка.</p>
           <div class="row-b">
@@ -552,10 +535,10 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
         </div>
       </div>
       <div class="req">
-        <div class="rv"><span class="mono">Система</span><b>Windows 10 / 11 x64</b></div>
-        <div class="rv d1"><span class="mono">Версии</span><b>1.21.4 · 1.21.11</b></div>
-        <div class="rv d2"><span class="mono">Загрузчик</span><b>Fabric</b></div>
-        <div class="rv d3"><span class="mono">Размер</span><b id="dlSize">63 КБ + ~217 МБ</b></div>
+        <div class="rv"><span>Система</span><b>Windows 10 / 11 x64</b></div>
+        <div class="rv d1"><span>Версии</span><b>1.21.4 · 1.21.11</b></div>
+        <div class="rv d2"><span>Загрузчик</span><b>Fabric</b></div>
+        <div class="rv d3"><span>Размер</span><b id="dlSize">63 КБ + ~217 МБ</b></div>
       </div>
     </div>
   </div>
@@ -564,10 +547,9 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
 <!-- ═════════ FAQ ═════════ -->
 <section id="faq">
   <div class="frame">
-    <div class="frame-top"><i class="cap l"></i><i class="cap r"></i><span class="mono lab l">?</span><span class="mono lab r">05 · FAQ</span></div>
+    <div class="frame-top"><i class="cap l"></i><i class="cap r"></i></div>
     <div class="wrap sec">
       <div class="sec-head">
-        <span class="mono rv">05 · FAQ</span>
         <h2 class="rv d1">Частые <em>вопросы</em></h2>
       </div>
       <div class="faq" id="faqList"></div>
@@ -591,8 +573,8 @@ footer{position:relative;padding:80px 0 40px;overflow:hidden}
   </div>
   <div class="foot-big" aria-hidden="true">Nebula</div>
   <div class="wrap foot-row" style="margin-top:20px">
-    <span class="mono">© 2026 Nebula Visuals</span>
-    <span class="mono">Не связано с Mojang и Microsoft</span>
+    <span>© 2026 Nebula Visuals</span>
+    <span>Не связано с Mojang и Microsoft</span>
   </div>
 </footer>
 
@@ -869,7 +851,6 @@ function render(){
   $('#more').hidden = !cut;
   $('#more').textContent = `Показать все ${list.length}`;
   $('#mods').innerHTML = shown.length ? shown.map(m=>{const c=CATS[m[1]];return `<div class="mod"><span class="ic" style="--c1:${c[1]};--c2:${c[2]}">${glyph[m[1]]}</span><div><b>${m[0]}</b><span>${m[2]}</span></div></div>`}).join('') : `<div class="empty">Ничего не нашлось по «${q.replace(/[<>&]/g,'')}»</div>`;
-  $('#count').textContent = `${shown.length} из ${M.length} функций`;
 }
 $('#q').addEventListener('input',render);
 $('#more').addEventListener('click',()=>{expanded=true;render();});
@@ -889,7 +870,7 @@ const FAQ = [
   ['Как сменить цвет интерфейса?','В меню на странице «Темы»: цвет, прозрачность, стекло, скругление и тени.'],
   ['Есть светлая тема?','Да: тёмное, светлое и «Авто» — по времени суток в мире.'],
 ];
-$('#faqList').innerHTML = FAQ.map(([q,a],i)=>`<details class="q rv ${i%2?'d1':''}"><summary><span class="mono">${String(i+1).padStart(2,'0')}</span>${q}<span class="pl"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M5 1v8M1 5h8"/></svg></span></summary><p>${a}</p></details>`).join('');
+$('#faqList').innerHTML = FAQ.map(([q,a],i)=>`<details class="q rv ${i%2?'d1':''}"><summary>${q}<span class="pl"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M5 1v8M1 5h8"/></svg></span></summary><p>${a}</p></details>`).join('');
 
 /* ── Последний релиз с GitHub ────────────────────────── */
 fetch('https://api.github.com/repos/s3lfcode1337-lang/nebula-launcher/releases/latest',{headers:{Accept:'application/vnd.github+json'}})
