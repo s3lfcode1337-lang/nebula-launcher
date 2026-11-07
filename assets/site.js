@@ -72,6 +72,479 @@ function face(seed) {
   return `<svg viewBox="0 0 8 8" shape-rendering="crispEdges">${px}</svg>`;
 }
 
+/* ═══════════ общий WebGL: шум, пейзаж ═══════════ */
+const NOISE_GLSL = `
+float sq(float x){ return x * x; }
+float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float vnoise(vec2 p){
+  vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = hash12(i); float b = hash12(i + vec2(1.0, 0.0));
+  float c = hash12(i + vec2(0.0, 1.0)); float d = hash12(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+float fbm(vec2 p){
+  float v = 0.0; float a = 0.5; mat2 m = mat2(1.6, 1.2, -1.2, 1.6);
+  for (int i = 0; i < 5; i++){ v += a * vnoise(p); p = m * p + vec2(1.7, 9.2); a *= 0.5; }
+  return v;
+}
+`;
+
+/*
+ * Пейзаж — настоящий рельеф: карта высот (шум с «эрозией» — гладкие долины,
+ * острые гребни), луч из камеры ищет склон, свет солнца или луны с мягкими
+ * тенями, снег по высоте и крутизне, ельник ниже границы леса, дымка по
+ * дальности и туман, лежащий в долинах. Камера и небо общие для обоих
+ * проходов, поэтому дымка гор ровно уходит в цвет неба у горизонта.
+ */
+const SCENE_GLSL = `
+uniform vec4 uCam;
+uniform vec2 uLight;
+const float FOCAL = 2.3;
+mat3 camMat(){
+  float cy = cos(uCam.z); float sy = sin(uCam.z);
+  float cp = cos(uCam.w); float sp = sin(uCam.w);
+  vec3 fw = vec3(sy * cp, sp, cy * cp);
+  vec3 rt = vec3(cy, 0.0, -sy);
+  return mat3(rt, cross(fw, rt), fw);
+}
+vec3 rayDir(vec2 frag){ return camMat() * normalize(vec3((2.0 * frag - uRes) / uRes.y, FOCAL)); }
+vec3 lightDir(){ return camMat() * normalize(vec3(uLight, FOCAL)); }
+vec3 toDisplay(vec3 c){ return pow(1.0 - exp(-max(c, vec3(0.0)) * 1.35), vec3(0.4545)); }
+vec3 skyLin(vec3 rd, vec3 L){
+  float e = max(rd.y, 0.0);
+  float s = max(dot(rd, L), 0.0);
+  vec3 c;
+  if (uSunset > 0.5){
+    float az = dot(normalize(rd.xz + vec2(1e-5, 0.0)), normalize(L.xz));
+    vec3 hor = mix(vec3(0.40, 0.15, 0.24), vec3(0.85, 0.26, 0.07), sq(smoothstep(-0.2, 1.0, az)));
+    c = mix(hor, vec3(0.26, 0.10, 0.22), smoothstep(0.0, 0.16, e));
+    c = mix(c, vec3(0.020, 0.018, 0.075), smoothstep(0.08, 0.55, e));
+    c += vec3(1.0, 0.42, 0.12) * pow(s, 8.0) * 0.55;
+    c += vec3(1.4, 0.80, 0.40) * pow(s, 64.0) * 1.3;
+  } else {
+    c = mix(vec3(0.007, 0.024, 0.077), vec3(0.0004, 0.0009, 0.004), smoothstep(0.0, 0.5, e));
+    c += vec3(0.012, 0.030, 0.026) * exp(-sq((e - 0.10) * 9.0));
+    c += vec3(0.05, 0.07, 0.11) * pow(s, 10.0);
+  }
+  return c;
+}
+`;
+
+const TERRAIN_FS = `
+uniform float uAlt;
+vec3 noised(vec2 x){
+  vec2 i = floor(x); vec2 f = fract(x);
+  vec2 u = f * f * (3.0 - 2.0 * f); vec2 du = 6.0 * f * (1.0 - f);
+  float a = hash12(i); float b = hash12(i + vec2(1.0, 0.0));
+  float c = hash12(i + vec2(0.0, 1.0)); float d = hash12(i + vec2(1.0, 1.0));
+  return vec3(a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y,
+              du * (vec2(b - a, c - a) + (a - b - c + d) * u.yx));
+}
+const mat2 M2 = mat2(0.8, -0.6, 0.6, 0.8);
+const mat2 M2T = mat2(0.8, 0.6, -0.6, 0.8);
+// x — крупные формы (три октавы), y — всё вместе. Число октав дробное:
+// последняя входит долей, и рельеф не скачет там, где луч меняет детальность.
+// Наклон считается вместе с высотой (gr: крупные формы — xy, всё — zw), а не
+// разностями соседних точек: так рельеф для нормали считается один раз.
+vec2 relief(vec2 x, float oct, out vec4 gr){
+  vec2 p = x / 1600.0;
+  float a = 0.0; float b = 1.0; vec2 d = vec2(0.0); float lo = 0.0;
+  mat2 m = mat2(1.0 / 1600.0);
+  vec2 ga = vec2(0.0); vec2 gl = vec2(0.0);
+  for (int i = 0; i < 9; i++){
+    float fi = float(i);
+    if (fi >= oct) break;
+    float w = min(oct - fi, 1.0);
+    vec3 n = noised(p);
+    d += n.yz * w;
+    float k = b * w / (1.0 + dot(d, d));
+    a += k * n.x;
+    ga += k * (m * n.yz);
+    if (i == 2){ lo = a; gl = ga; }
+    b *= 0.48; p = M2 * p * 2.0; m = 2.0 * M2T * m;
+  }
+  if (oct < 3.0){ lo = a; gl = ga; }
+  gr = vec4(gl, ga);
+  return vec2(lo, a);
+}
+// Ближе к камере — невысокие холмы, вдали — большой хребет. Крупные формы
+// заострены степенью, мелкие — нет: иначе на вершинах росли тонкие шпили.
+float ground(vec2 x, float oct, out vec2 grad){
+  vec4 gr;
+  vec2 r = relief(x, oct, gr);
+  vec2 dc = x - uCam.xy;
+  float dist = length(dc);
+  float u = clamp((dist - 1000.0) / 8000.0, 0.0, 1.0);
+  float sc = 180.0 + 1000.0 * u * u * (3.0 - 2.0 * u);
+  float f = pow(r.x, 1.6) + (r.y - r.x) * (0.6 + 0.5 * r.x);
+  vec2 df = 1.6 * pow(r.x, 0.6) * gr.xy + (gr.zw - gr.xy) * (0.6 + 0.5 * r.x) + (r.y - r.x) * 0.5 * gr.xy;
+  grad = df * sc + f * (6000.0 * u * (1.0 - u) / 8000.0) * dc / max(dist, 1.0);
+  return f * sc;
+}
+// Сколько октав различимо на таком расстоянии: мельче пикселя — не нужно.
+float footprint(float t){ return 0.0011 * t + 0.05; }
+float lod(float t, float hi){ return clamp(log2(1600.0 / (2.5 * footprint(t))), 4.0, hi); }
+float forest(vec2 x, float g){
+  float tl = uSunset > 0.5 ? 720.0 : 520.0;
+  return smoothstep(tl, tl - 260.0, g) * smoothstep(0.32, 0.58, vnoise(x / 520.0 + 3.7));
+}
+// Ели — узкие конусы на сетке со сдвигом; хватает четырёх ближних клеток.
+// x — высота ели над склоном, yz — её наклон.
+vec3 trees(vec2 x, float g){
+  float dens = forest(x, g);
+  if (dens <= 0.0) return vec3(0.0);
+  vec2 q = x / 10.0;
+  vec2 o = floor(q - 0.5);
+  vec3 best = vec3(0.0);
+  for (int j = 0; j < 2; j++){
+    for (int i = 0; i < 2; i++){
+      vec2 id = o + vec2(float(i), float(j));
+      if (hash12(id * 1.37 + 5.1) < dens){
+        vec2 c = id + 0.5 + (vec2(hash12(id + 7.7), hash12(id + 3.3)) - 0.5) * 0.45;
+        float th = 13.0 + 11.0 * hash12(id + 1.9);
+        vec2 dv = (q - c) * 10.0;
+        float dl = max(length(dv), 1e-3);
+        float hg = th - dl / 0.22;
+        if (hg > best.x) best = vec3(hg, -dv / (dl * 0.22));
+      }
+    }
+  }
+  return best;
+}
+float height(vec2 x, float t){
+  vec2 gd;
+  float g = ground(x, lod(t, 8.0), gd);
+  if (t < 2000.0) g += trees(x, g).x * (1.0 - smoothstep(1200.0, 2000.0, t));
+  return g;
+}
+// Луч идёт шагами, а пройдя склон насквозь, уточняет точку делением пополам —
+// в том же цикле: высота считается в одном месте, и шейдер компилируется быстрее.
+float march(vec3 ro, vec3 rd){
+  float t = 2.0; float tp = 0.0; float h = 1.0;
+  float a = 0.0; float b = 0.0; float split = 0.0;
+  for (int i = 0; i < 500; i++){
+    float s = split > 0.0 ? 0.5 * (a + b) : t;
+    vec3 p = ro + rd * s;
+    if (split < 0.5 && p.y > 3000.0 && rd.y >= 0.0) return -1.0;
+    h = p.y - height(p.xz, s);
+    if (split > 0.0){
+      if (h > 0.0) a = s; else b = s;
+      split += 1.0;
+      if (split > 6.5) return 0.5 * (a + b);
+    } else if (h < 0.0){
+      a = tp; b = t; split = 1.0;
+    } else {
+      if (h < 0.0005 * t) return t;
+      tp = t;
+      t += clamp(0.3 * h, 0.2 + 0.0013 * t, 0.03 * t + 2.0);
+      if (t > 26000.0) return -1.0;
+    }
+  }
+  if (split > 0.0) return 0.5 * (a + b);
+  // Шаги кончились: если луч всё ещё заметно выше склона — это небо, а не гора.
+  return h < 0.0015 * t ? t : -1.0;
+}
+float shadow(vec3 p, vec3 L){
+  float res = 1.0; float t = 6.0;
+  vec2 gd;
+  for (int i = 0; i < 40; i++){
+    vec3 q = p + L * t;
+    if (q.y > 3000.0) break;
+    float h = q.y - ground(q.xz, 5.0, gd);
+    res = min(res, 12.0 * h / t);
+    if (res < 0.005) return 0.0;
+    t += clamp(0.6 * h, 5.0, 400.0);
+  }
+  return clamp(res, 0.0, 1.0);
+}
+vec3 fog(vec3 col, vec3 ro, vec3 rd, float t, vec3 L){
+  float haze = sq(t / (uSunset > 0.5 ? 15000.0 : 17000.0));
+  float b = 1.0 / 50.0;
+  float ry = abs(rd.y) < 1e-4 ? 1e-4 : rd.y;
+  float mist = (uSunset > 0.5 ? 0.0015 : 0.0020) * exp(-ro.y * b) * (1.0 - exp(-t * ry * b)) / (ry * b);
+  col = mix(col, skyLin(rd, L), 1.0 - exp(-haze));
+  vec3 mc = uSunset > 0.5 ? mix(vec3(0.16, 0.09, 0.20), vec3(0.95, 0.42, 0.16), pow(max(dot(rd, L), 0.0), 6.0)) : vec3(0.030, 0.050, 0.085);
+  return mix(col, mc, 1.0 - exp(-mist));
+}
+vec3 shadeHit(vec3 ro, vec3 rd, float t, vec3 L){
+  vec3 p = ro + rd * t;
+  vec2 gg;
+  float g0 = ground(p.xz, lod(t, 9.0), gg);
+  float tw = 1.0 - smoothstep(1200.0, 2000.0, t);
+  vec3 tr = tw > 0.0 ? trees(p.xz, g0) * tw : vec3(0.0);
+  vec3 N = normalize(vec3(-gg.x - tr.y, 1.0, -gg.y - tr.z));
+  vec3 Ng = normalize(vec3(-gg.x, 1.0, -gg.y));
+  float tree = smoothstep(0.4, 1.6, tr.x);
+  float night = 1.0 - uSunset;
+
+  float n1 = vnoise(p.xz * 0.011);
+  float n2 = fbm(p.xz / 900.0);
+  vec3 rock = mix(vec3(0.045, 0.040, 0.037), vec3(0.085, 0.076, 0.068), n1);
+  rock *= 0.78 + 0.32 * vnoise(vec2(p.x * 0.0015 + p.z * 0.0011, p.y * 0.045));
+  float snowLine = mix(1000.0, 300.0, night) + 360.0 * (n2 - 0.5);
+  float snowH = smoothstep(snowLine - 140.0, snowLine + 160.0, g0);
+  float snowS = smoothstep(mix(0.60, 0.48, night), mix(0.80, 0.72, night), Ng.y);
+  float snow = snowH * snowS;
+  vec3 alb = mix(rock, vec3(0.82, 0.86, 0.93), snow);
+  if (night < 0.5) alb = mix(alb, vec3(0.040, 0.050, 0.022), (1.0 - snowH) * smoothstep(0.78, 0.92, Ng.y) * 0.75);
+  else alb = mix(alb, vec3(0.70, 0.75, 0.84), (1.0 - snow) * smoothstep(0.80, 0.93, Ng.y) * 0.85);
+  float fd = forest(p.xz, g0);
+  vec3 tc = vec3(0.010, 0.021, 0.016) * (0.7 + 0.6 * hash12(floor(p.xz / 10.0) + 0.5));
+  if (night > 0.5) tc = mix(tc, vec3(0.55, 0.60, 0.70), smoothstep(0.55, 0.92, N.y) * 0.5);
+  alb = mix(alb, alb * 0.55, fd * (1.0 - tree) * tw * mix(1.0, 0.3, night));
+  alb = mix(alb, tc * (0.6 + 0.8 * vnoise(p.xz / 40.0)), fd * 0.85 * (1.0 - tw));
+  alb = mix(alb, tc, tree);
+
+  float dif = max(dot(N, L), 0.0);
+  float sh = dif > 0.0 ? shadow(p + Ng * 4.0, L) : 0.0;
+  float amb = 0.55 + 0.45 * N.y;
+  float bac = clamp(0.25 + 0.75 * dot(N, normalize(vec3(-L.x, 0.0, -L.z))), 0.0, 1.0) * (0.5 + 0.5 * N.y);
+  vec3 sunC = mix(vec3(3.4, 1.55, 0.62), vec3(0.30, 0.40, 0.64), night);
+  vec3 skyC = mix(vec3(0.22, 0.17, 0.32), vec3(0.010, 0.030, 0.062), night);
+  vec3 bacC = mix(vec3(0.09, 0.05, 0.06), vec3(0.002, 0.006, 0.012), night);
+  vec3 col = alb * (dif * sh * sunC + amb * skyC + bac * bacC);
+  float fre = pow(clamp(1.0 + dot(rd, N), 0.0, 1.0), 4.0);
+  col += fre * (0.2 + 0.8 * snow) * mix(vec3(0.30, 0.16, 0.12) * sq(max(dot(rd, L), 0.0)), vec3(0.004, 0.012, 0.016), night);
+  vec3 hv = normalize(L - rd);
+  col += snow * dif * sh * pow(max(dot(N, hv), 0.0), 30.0) * sunC * 0.12;
+  return fog(col, ro, rd, t, L);
+}
+void main(){
+  vec3 ro = vec3(uCam.x, 0.0, uCam.y);
+  vec2 gd;
+  ro.y = ground(ro.xz, 4.0, gd) + uAlt;
+  vec3 rd = rayDir(gl_FragCoord.xy);
+  vec3 L = lightDir();
+  float t = march(ro, rd);
+  if (t < 0.0){ gl_FragColor = vec4(0.0); return; }
+  gl_FragColor = vec4(toDisplay(shadeHit(ro, rd, t, L)), 1.0);
+}
+`;
+
+/* Небо каждый кадр: закат с облаками или ночь с луной и северным сиянием; поверх — горы, туман, снегопад. */
+const SKY_FS = `
+uniform sampler2D uTerrain;
+uniform float uTime;
+uniform vec2 uMouse;
+uniform float uReveal;
+float stars(vec2 frag){
+  float cell = 7.0 * uPx;
+  vec2 g = frag / cell; vec2 id = floor(g); vec2 f = (fract(g) - 0.5) * cell;
+  float h = hash12(id);
+  if (h > 0.05) return 0.0;
+  vec2 off = (vec2(hash12(id + 1.7), hash12(id + 9.1)) - 0.5) * cell * 0.6;
+  float r = (0.5 + 0.9 * hash12(id + 4.4)) * uPx;
+  float tw = 0.55 + 0.45 * sin(uTime * (0.6 + 2.0 * hash12(id + 3.3)) + h * 90.0);
+  return exp(-dot(f - off, f - off) / (r * r)) * tw * (0.4 + 0.6 * hash12(id + 7.7));
+}
+vec3 glow(vec3 base, vec3 add){ return 1.0 - (1.0 - base) * exp(-add * 1.6); }
+void main(){
+  vec2 frag = gl_FragCoord.xy;
+  vec2 uv = frag / uRes;
+  float aspect = uRes.x / uRes.y;
+  vec2 p = vec2(uv.x * aspect, uv.y);
+  vec3 rd = rayDir(frag);
+  vec3 L = lightDir();
+  float ang = acos(clamp(dot(rd, L), -1.0, 1.0));
+  float apx = 2.0 / (FOCAL * uRes.y);
+  vec3 col = toDisplay(skyLin(rd, L));
+  if (uSunset > 0.5){
+    if (rd.y > 0.0){
+      vec2 cp = rd.xz / (rd.y + 0.035) * 0.38 + vec2(uTime * 0.006, uTime * 0.0025);
+      float n = fbm(cp * vec2(0.9, 2.4) + 1.3);
+      float cov = smoothstep(0.50, 0.80, n) * smoothstep(0.01, 0.08, rd.y) * (1.0 - smoothstep(0.30, 0.62, rd.y));
+      float sl = pow(max(dot(rd, L), 0.0), 5.0);
+      vec3 cc = mix(vec3(0.50, 0.27, 0.42), vec3(1.0, 0.64, 0.38), sl);
+      cc = mix(cc, vec3(0.22, 0.16, 0.34), smoothstep(0.12, 0.42, rd.y) * 0.7);
+      cc *= 0.85 + 0.3 * smoothstep(0.6, 0.9, n);
+      col = mix(col, cc, cov * 0.8);
+    }
+    col = glow(col, vec3(0.9, 0.92, 1.0) * stars(frag) * smoothstep(0.30, 0.55, rd.y));
+    col = mix(col, vec3(1.0, 0.95, 0.84), smoothstep(0.028 + apx, 0.028 - apx, ang));
+  } else {
+    vec3 add = vec3(0.85, 0.9, 1.0) * stars(frag) * smoothstep(0.02, 0.16, rd.y);
+    vec2 par = uMouse * vec2(0.012, 0.006);
+    for (int i = 0; i < 3; i++){
+      float fi = float(i);
+      float x = p.x + par.x * 0.5;
+      float base = 0.60 + fi * 0.07 + 0.05 * sin(x * 1.6 + uTime * 0.12 + fi * 2.1) + 0.05 * (vnoise(vec2(x * 2.6 + fi * 4.0, uTime * 0.06)) - 0.5);
+      float d = uv.y - base;
+      if (d > -0.03){
+        float rise = smoothstep(-0.03, 0.015, d) * exp(-max(d, 0.0) * (4.5 + fi * 2.0));
+        float rays = vnoise(vec2(x * 90.0 + fi * 13.0, uTime * 0.35 + fi));
+        rays = 0.35 + 0.65 * rays * rays;
+        float fold = 0.55 + 0.45 * (0.6 * vnoise(vec2(x * 3.0 - uTime * 0.05, fi * 3.7)) + 0.4 * vnoise(vec2(x * 7.3 + uTime * 0.04, fi * 1.9)));
+        vec3 ac = mix(vec3(0.20, 1.0, 0.62), vec3(0.62, 0.38, 1.0), smoothstep(0.0, 0.22, d));
+        add += ac * rise * rays * fold * (0.55 - fi * 0.12);
+      }
+    }
+    col = glow(col, add);
+    float md = smoothstep(0.022 + apx, 0.022 - apx, ang);
+    col = mix(col, vec3(0.93, 0.95, 1.0) * (0.9 + 0.1 * vnoise(rd.xy * 700.0)), md);
+  }
+  vec4 tr = texture2D(uTerrain, clamp(uv + uMouse * vec2(0.0022, 0.0012), 0.001, 0.999)) * uReveal;
+  col = col * (1.0 - tr.a) + tr.rgb;
+  float m = fbm(vec2(p.x * 2.0 + uTime * 0.02, uv.y * 7.0 - uTime * 0.006));
+  vec3 mc = toDisplay(skyLin(normalize(vec3(rd.x, 0.0, rd.z)), L));
+  col = mix(col, mc, tr.a * (1.0 - smoothstep(0.15, 0.5, uv.y)) * smoothstep(0.5, 0.85, m) * 0.22);
+  if (uSunset > 0.5) col = glow(col, vec3(1.0, 0.55, 0.25) * exp(-ang * 16.0) * 0.30);
+  else {
+    vec3 fl = vec3(0.0);
+    for (int k = 0; k < 3; k++){
+      float fk = float(k);
+      float cell = (30.0 + fk * 18.0) * uPx;
+      vec2 q = frag + vec2(sin(uTime * 0.6 + fk) * 12.0 * uPx, uTime * (40.0 + fk * 25.0) * uPx);
+      vec2 id = floor(q / cell); vec2 f = (fract(q / cell) - 0.5) * cell;
+      if (hash12(id + fk * 31.0) < 0.35){
+        vec2 off = (vec2(hash12(id + 2.3), hash12(id + 7.9)) - 0.5) * cell * 0.7;
+        float r = (0.8 + fk * 0.7) * uPx;
+        fl += vec3(0.85, 0.9, 1.0) * exp(-dot(f - off, f - off) / (r * r * 1.5)) * (0.45 + fk * 0.2);
+      }
+    }
+    col = glow(col, fl);
+  }
+  col *= 0.86 + 0.14 * smoothstep(1.25, 0.3, length(uv - vec2(0.5, 0.55)));
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+/* Кадр каждой сцены: где стоит камера (x, z, поворот, наклон), на какой высоте над склоном, где на небе солнце или луна. */
+const SCENES = {
+  sunset: { cam: [6000, 10000, 4.0, 0.0], alt: 200, light: [0.55, 0.16] },
+  night: { cam: [9000, 3000, 2.5, 0.0], alt: 200, light: [0.85, 0.62] },
+};
+
+/**
+ * Реалистичный пейзаж на холсте: sunset — закат за HUD, иначе — ночь с северным
+ * сиянием. Шейдеры собираются в фоне (KHR_parallel_shader_compile). Горы
+ * считаются один раз на размер, полосами по несколько десятков тысяч пикселей
+ * за кадр — без долгой паузы на слабой видеокарте; начинают заранее, когда до
+ * холста остаётся меньше экрана, а если не успели — проявляются из тумана.
+ * Небо рисуется каждый кадр поверх готовой картинки гор. Не вышло (нет WebGL,
+ * шейдер не собрался, контекст потерян) — onFail, место занимает запасной фон.
+ */
+function Landscape(cv, sunset, onFail, opt) {
+  // alpha: пока шейдеры компилируются, сквозь пустой холст видна CSS-подложка в цветах неба.
+  const gl = cv.getContext('webgl', { antialias: false, alpha: true, depth: false, stencil: false });
+  if (!gl) return null;
+  const hp = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
+  if (!hp || hp.precision < 16) return null;
+  const par = gl.getExtension('KHR_parallel_shader_compile');
+  // Закат или ночь — константа, а не uniform: ненужная ветка выпадает при компиляции.
+  const HEAD = 'precision highp float;\nuniform vec2 uRes;\nuniform float uPx;\nconst float uSunset = ' + (sunset ? '1.0' : '0.0') + ';\n' + NOISE_GLSL + SCENE_GLSL;
+  const compile = fs => {
+    const mk = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
+    const p = gl.createProgram(), f = mk(gl.FRAGMENT_SHADER, fs);
+    gl.attachShader(p, mk(gl.VERTEX_SHADER, 'attribute vec2 a; void main(){ gl_Position = vec4(a, 0.0, 1.0); }'));
+    gl.attachShader(p, f);
+    gl.bindAttribLocation(p, 0, 'a'); gl.linkProgram(p);
+    return { p, f };
+  };
+  const progs = [compile(HEAD + TERRAIN_FS), compile(HEAD + SKY_FS)];
+  const sc = Object.assign({}, sunset ? SCENES.sunset : SCENES.night, opt);
+
+  let ready = false, dead = false, ut, us;
+  let W = 0, H = 0, pxs = 1, cur = null, next = null, row = 0, shown = -1, last = -1;
+  const fail = e => { if (e) console.warn(e); if (!dead) { dead = true; if (onFail) onFail(); } };
+  cv.addEventListener('webglcontextlost', e => { e.preventDefault(); fail(); });
+  const loc = (p, names) => { const o = {}; for (const n of names) o[n] = gl.getUniformLocation(p, n); return o; };
+  // Готовы ли шейдеры: пока компилируются — false, не собрались — исключение.
+  function check() {
+    if (par) for (const x of progs) if (!gl.getProgramParameter(x.p, par.COMPLETION_STATUS_KHR)) return false;
+    for (const x of progs) if (!gl.getProgramParameter(x.p, gl.LINK_STATUS)) throw new Error(gl.getShaderInfoLog(x.f) || gl.getProgramInfoLog(x.p) || 'link');
+    ut = loc(progs[0].p, ['uRes', 'uPx', 'uCam', 'uLight', 'uAlt']);
+    us = loc(progs[1].p, ['uRes', 'uPx', 'uCam', 'uLight', 'uTerrain', 'uTime', 'uMouse', 'uReveal']);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    return true;
+  }
+  const prepare = () => {
+    if (!ready) { try { ready = check(); } catch (e) { fail(e); } }
+    return ready && !dead;
+  };
+  const common = u => {
+    gl.uniform2f(u.uRes, W, H); gl.uniform1f(u.uPx, pxs);
+    gl.uniform4f(u.uCam, sc.cam[0], sc.cam[1], sc.cam[2], sc.cam[3]);
+    gl.uniform2f(u.uLight, sc.light[0], sc.light[1]);
+  };
+  const target = () => {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { tex, fbo };
+  };
+  const free = t => { if (t) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fbo); } };
+  function resize() {
+    if (dead) return;
+    pxs = Math.min(devicePixelRatio || 1, 1.5) * 0.85;
+    const w = Math.max(2, Math.round(cv.clientWidth * pxs)), h = Math.max(2, Math.round(cv.clientHeight * pxs));
+    if (w === W && h === H) return;
+    W = w; H = h;
+    cv.width = W; cv.height = H;
+    free(next);
+    next = target(); row = 0; last = -1;
+  }
+  // Одна полоса гор; true — картинка готова.
+  function build(budget) {
+    const rows = Math.max(4, Math.floor(budget / W));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, next.fbo);
+    gl.viewport(0, 0, W, H);
+    gl.enable(gl.SCISSOR_TEST); gl.scissor(0, row, W, rows);
+    gl.useProgram(progs[0].p); common(ut); gl.uniform1f(ut.uAlt, sc.alt);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    row += rows;
+    if (row < H) return false;
+    free(cur); cur = next; next = null;
+    return true;
+  }
+  // Заранее: холст ещё ниже экрана — компилируем и считаем горы мелкими
+  // полосами, не мешая первому экрану. Тогда к прокрутке всё уже готово.
+  let near = false, raf = 0, armed = false;
+  const warm = () => {
+    raf = 0;
+    if (dead || !near || !armed) return;
+    if (prepare()) {
+      if (!W) resize();
+      if (next && build(20000) && shown < 0) shown = -2;
+    }
+    if (!dead && (!ready || next)) raf = requestAnimationFrame(warm);
+  };
+  const kick = () => { if (!raf && armed && near) raf = requestAnimationFrame(warm); };
+  setTimeout(() => { armed = true; kick(); }, 600);
+  new IntersectionObserver(es => { near = es[es.length - 1].isIntersecting; kick(); }, { rootMargin: '900px' }).observe(cv);
+  function frame(time, mx, my, still) {
+    if (dead || !prepare()) return;
+    if (!W) resize();
+    let force = last < 0;
+    if (next) { if (build(40000) && shown < 0) shown = time; force = true; }
+    const rv = cur ? (shown < 0 ? 1 : clamp((time - shown) / 0.9)) : 0;
+    if (rv < 1) force = true;
+    if (!force && (still || time - last < 1 / 30)) return;
+    last = time;
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(progs[1].p); common(us);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, cur ? cur.tex : null); gl.uniform1i(us.uTerrain, 0);
+    gl.uniform1f(us.uTime, still ? 0 : time); gl.uniform2f(us.uMouse, mx || 0, my || 0);
+    gl.uniform1f(us.uReveal, easeOut(rv));
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  return { resize, frame };
+}
+
 /* ═══════════ навигация, свет, появление, магниты ═══════════ */
 safe('nav', () => {
   const nav = $('#nav'), burger = $('#burger'), sheet = $('#sheet');
@@ -658,111 +1131,23 @@ safe('hud', () => {
   size.addEventListener('input', applySize);
   applySize();
 
-  // Мир за панелями: закат над пиксельными холмами — его и размывает стекло.
-  const world = World(cv);
+  // Мир за панелями: закат над горами — его и размывает стекло. Небо и туман
+  // рисуются тридцать раз в секунду: им хватает, а стеклу реже приходится
+  // заново размывать то, что под ним. Без WebGL — закатный градиент.
+  // Подложка в цветах заката: видна, пока шейдеры компилируются, и вместо гор без WebGL.
+  cv.style.background = 'linear-gradient(180deg,#2a2148 0%,#6b4470 38%,#c98466 56%,#6d4a52 70%,#2a1e2c 100%)';
+  const land = Landscape(cv, true);
+  if (!land) return;
   let wx = 0, wy = 0;
-  new ResizeObserver(() => world.build()).observe(cv);
-  world.build();
-  loop(stage, (t, dt) => {
+  new ResizeObserver(() => land.resize()).observe(cv);
+  loop(stage, t => {
     const r = stage.getBoundingClientRect();
     const tx = clamp((ptr.x - r.left) / Math.max(1, r.width), -0.5, 1.5) * 2 - 1;
     const ty = clamp((ptr.y - r.top) / Math.max(1, r.height), -0.5, 1.5) * 2 - 1;
     wx += (tx - wx) * 0.05; wy += (ty - wy) * 0.05;
-    world.draw(reduce ? 0 : dt, wx, wy);
+    land.frame(t, wx, wy, reduce);
   });
 });
-
-function World(cv) {
-  const ctx = cv.getContext('2d');
-  let W = 0, H = 0, d = 1, sky = null, hills = [], clouds = [];
-  const mulberry = a => () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
-  const wave = (x, s) => 0.5 + 0.22 * Math.sin(x * 1.3 + s) + 0.16 * Math.sin(x * 2.7 + s * 1.7) + 0.08 * Math.sin(x * 6.1 + s * 2.3) + 0.04 * Math.sin(x * 11.3 + s * 3.1);
-  const off = (w, h) => { const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * d)); c.height = Math.max(1, Math.round(h * d)); const g = c.getContext('2d'); g.setTransform(d, 0, 0, d, 0, 0); return [c, g]; };
-  function build() {
-    const r = cv.getBoundingClientRect();
-    if (r.width < 2 || r.height < 2) return;
-    W = r.width; H = r.height; d = Math.min(devicePixelRatio || 1, 2);
-    cv.width = Math.round(W * d); cv.height = Math.round(H * d);
-    const rnd = mulberry(7);
-    let g;
-    [sky, g] = off(W, H);
-    const gr = g.createLinearGradient(0, 0, 0, H);
-    [[0, '#060a26'], [0.30, '#171c5c'], [0.52, '#4b2d8a'], [0.68, '#a2458f'], [0.80, '#f07a86'], [0.90, '#ffad7f'], [1, '#ffd29a']].forEach(([o, c]) => gr.addColorStop(o, c));
-    g.fillStyle = gr; g.fillRect(0, 0, W, H);
-    for (let i = 0; i < 170; i++) {
-      const x = rnd() * W, y = rnd() * H * 0.5;
-      const a = Math.max(0, 1 - y / (H * 0.5)) * (0.25 + rnd() * 0.75);
-      g.fillStyle = `rgba(255,255,255,${a.toFixed(3)})`;
-      const s = rnd() < 0.08 ? 2 : 1;
-      g.fillRect(Math.round(x), Math.round(y), s, s);
-    }
-    const sx = W * 0.70, sy = H * 0.585;
-    const sg = g.createRadialGradient(sx, sy, 0, sx, sy, H * 0.75);
-    sg.addColorStop(0, 'rgba(255,220,160,.85)'); sg.addColorStop(0.16, 'rgba(255,160,130,.45)'); sg.addColorStop(0.5, 'rgba(220,90,150,.12)'); sg.addColorStop(1, 'rgba(200,80,160,0)');
-    g.fillStyle = sg; g.fillRect(0, 0, W, H);
-    const ss = Math.round(H * 0.105);
-    g.fillStyle = '#fff1c9'; g.fillRect(Math.round(sx - ss / 2), Math.round(sy - ss / 2), ss, ss);
-    g.fillStyle = 'rgba(255,255,255,.55)'; g.fillRect(Math.round(sx - ss * 0.3), Math.round(sy - ss * 0.3), Math.round(ss * 0.6), Math.round(ss * 0.6));
-    const defs = [
-      { top: '#8a5fc0', bot: '#6a4aa5', base: 0.64, amp: 0.13, block: 0.017, seed: 1.3, par: 8, freq: 2.2 },
-      { top: '#4a3790', bot: '#33276f', base: 0.72, amp: 0.11, block: 0.023, seed: 4.1, par: 18, freq: 2.8 },
-      { top: '#211d55', bot: '#15133a', base: 0.82, amp: 0.085, block: 0.031, seed: 7.7, par: 34, freq: 3.4, trees: true },
-    ];
-    hills = defs.map(df => {
-      const pad = 60, tw = W + pad * 2;
-      const [c, lg] = off(tw, H);
-      const b = Math.max(4, Math.round(H * df.block));
-      const g2 = lg.createLinearGradient(0, H * (df.base - df.amp), 0, H);
-      g2.addColorStop(0, df.top); g2.addColorStop(1, df.bot);
-      lg.fillStyle = g2;
-      const tops = [];
-      for (let x = 0; x < tw; x += b) {
-        const n = wave((x / tw) * df.freq * Math.PI, df.seed);
-        const y = Math.round((H * df.base - (n - 0.5) * 2 * H * df.amp) / b) * b;
-        lg.fillRect(x, y, b + 0.5, H - y + 1);
-        tops.push([x, y]);
-      }
-      if (df.trees) {
-        const rr = mulberry(5);
-        for (const [x, y] of tops) if (rr() < 0.13) {
-          lg.fillStyle = '#100d28'; lg.fillRect(x, y - b * 2, b, b * 2);
-          lg.fillStyle = '#16133a'; lg.fillRect(x - b, y - b * 4, b * 3, b * 2.2); lg.fillRect(x, y - b * 5, b, b);
-        }
-      }
-      lg.globalCompositeOperation = 'source-atop';
-      const hz = lg.createLinearGradient(0, H * (df.base - df.amp * 1.2), 0, H * (df.base + 0.12));
-      hz.addColorStop(0, 'rgba(255,170,190,.22)'); hz.addColorStop(1, 'rgba(255,170,190,0)');
-      lg.fillStyle = hz; lg.fillRect(0, 0, tw, H);
-      lg.globalCompositeOperation = 'source-over';
-      return { c, pad, par: df.par, tw };
-    });
-    clouds = Array.from({ length: 8 }, () => {
-      const s = Math.max(3, Math.round(H * (0.012 + rnd() * 0.01)));
-      const cols = 5 + Math.floor(rnd() * 8), rows = 2 + Math.floor(rnd() * 2);
-      const cells = [];
-      for (let ry = 0; ry < rows; ry++) for (let q = 0; q < cols; q++) {
-        if (rnd() < (ry === 0 ? 0.55 : 0.92) && !(ry === rows - 1 && (q === 0 || q === cols - 1))) cells.push([q, ry]);
-      }
-      return { x: rnd() * W, y: H * (0.08 + rnd() * 0.34), s, cells, v: 4 + rnd() * 9, a: 0.3 + rnd() * 0.35 };
-    });
-  }
-  function draw(dt, mx, my) {
-    if (!sky) return;
-    ctx.setTransform(d, 0, 0, d, 0, 0);
-    ctx.drawImage(sky, 0, 0, W, H);
-    for (const c of clouds) {
-      c.x += c.v * dt;
-      if (c.x > W + 140) c.x = -180;
-      ctx.fillStyle = `rgba(255,226,240,${c.a})`;
-      for (const [q, ry] of c.cells) ctx.fillRect(Math.round(c.x + q * c.s - mx * 6), Math.round(c.y + ry * c.s), c.s, c.s);
-    }
-    for (const h of hills) ctx.drawImage(h.c, -h.pad - mx * h.par, my * h.par * 0.25, h.tw, H);
-    const fog = ctx.createLinearGradient(0, H * 0.55, 0, H);
-    fog.addColorStop(0, 'rgba(30,20,70,0)'); fog.addColorStop(1, 'rgba(10,8,30,.45)');
-    ctx.fillStyle = fog; ctx.fillRect(0, 0, W, H);
-  }
-  return { build, draw };
-}
 
 /* ═══════════ карточка: меню ═══════════ */
 safe('menu', () => {
@@ -855,161 +1240,367 @@ safe('trails', () => {
   });
 });
 
-/* ═══════════ карточка: удары ═══════════ */
+/* ═══════════ карточка: удары — 3D-игрок ═══════════ */
+function loadThree() {
+  return new Promise((resolve, reject) => {
+    if (window.THREE) { resolve(window.THREE); return; }
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+    s.async = true;
+    s.onload = () => (window.THREE ? resolve(window.THREE) : reject(new Error('three.js не загрузился')));
+    s.onerror = () => reject(new Error('three.js не загрузился'));
+    document.head.appendChild(s);
+  });
+}
+
+/* Скин игрока по граням — свой, не стандартный; из того же лица рисуется аватар в HUD. */
+const SKIN = (() => {
+  let a = 41;
+  const rnd = () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const pick = arr => arr[Math.floor(rnd() * arr.length)];
+  const SK = ['#e2b493', '#dcab89', '#e8bea0'], HAIR = ['#2b1c14', '#35231a', '#24170f'];
+  const HOOD = ['#272b55', '#23274d', '#2b3060'], HOOD_D = ['#1d2044', '#1a1d3e'];
+  const ACC = ['#4d8dff', '#5b98ff', '#4485f5'], PANTS = ['#2c3047', '#282b40', '#31354d'];
+  const grid = (w, h, fn) => Array.from({ length: h }, (_, y) => Array.from({ length: w }, (_, x) => fn(x, y)));
+  const headFront = grid(8, 8, (x, y) => {
+    if (y < 2) return pick(HAIR);
+    if (y === 2 && (x === 0 || x === 7)) return pick(HAIR);
+    if (y === 3 && (x === 1 || x === 2 || x === 5 || x === 6)) return '#3a2519';
+    if (y === 4 && (x === 1 || x === 6)) return '#ffffff';
+    if (y === 4 && (x === 2 || x === 5)) return '#3d7bff';
+    if (y === 5 && (x === 3 || x === 4)) return '#cf9a78';
+    if (y === 6 && (x === 3 || x === 4)) return '#8e5444';
+    return pick(SK);
+  });
+  const sleeve = () => grid(4, 12, (x, y) => (y < 8 ? pick(HOOD) : y === 8 ? pick(ACC) : pick(SK)));
+  const trouser = () => grid(4, 12, (x, y) => (y < 9 ? pick(PANTS) : y < 11 ? '#e8ebf2' : '#4d8dff'));
+  return {
+    head: {
+      front: headFront,
+      back: grid(8, 8, (x, y) => (y < 7 ? pick(HAIR) : pick(SK))),
+      right: grid(8, 8, (x, y) => ((y < 3 || (y < 6 && x >= 5)) ? pick(HAIR) : (y === 4 && x === 3 ? '#cf9a78' : pick(SK)))),
+      left: grid(8, 8, (x, y) => ((y < 3 || (y < 6 && x <= 2)) ? pick(HAIR) : (y === 4 && x === 4 ? '#cf9a78' : pick(SK)))),
+      top: grid(8, 8, () => pick(HAIR)),
+      bottom: grid(8, 8, () => pick(SK)),
+    },
+    body: {
+      front: grid(8, 12, (x, y) => {
+        if (y === 0) return pick(HOOD_D);
+        if ((x === 2 || x === 5) && y >= 1 && y <= 4) return '#e6eaf4';
+        if (y === 6 || y === 7) return pick(ACC);
+        if (y >= 8 && y <= 9 && x >= 2 && x <= 5) return pick(HOOD_D);
+        if (y >= 10) return pick(HOOD_D);
+        return pick(HOOD);
+      }),
+      back: grid(8, 12, (x, y) => ((y < 4 && x >= 1 && x <= 6) ? pick(HOOD_D) : (y === 6 || y === 7) ? pick(ACC) : pick(HOOD))),
+      right: grid(4, 12, (x, y) => ((y === 6 || y === 7) ? pick(ACC) : pick(HOOD))),
+      left: grid(4, 12, (x, y) => ((y === 6 || y === 7) ? pick(ACC) : pick(HOOD))),
+      top: grid(8, 4, () => pick(HOOD)),
+      bottom: grid(8, 4, () => pick(PANTS)),
+    },
+    arm: { front: sleeve(), back: sleeve(), right: sleeve(), left: sleeve(), top: grid(4, 4, () => pick(HOOD)), bottom: grid(4, 4, () => pick(SK)) },
+    leg: { front: trouser(), back: trouser(), right: trouser(), left: trouser(), top: grid(4, 4, () => pick(PANTS)), bottom: grid(4, 4, () => '#3d6fe0') },
+    faceSvg() {
+      let px = '';
+      headFront.forEach((row, y) => row.forEach((c, x) => { px += `<rect x="${x}" y="${y}" width="1.02" height="1.02" fill="${c}"/>`; }));
+      return `<svg viewBox="0 0 8 8" shape-rendering="crispEdges">${px}</svg>`;
+    },
+  };
+})();
+
 safe('hits', () => {
-  const cv = $('#cvHits'); const card = cv.closest('.card');
-  const c2 = canvas2d(cv);
+  const box = $('#hit3d');
+  if (!box) return;
+  const cv3 = $('#cvHits3d'), fx2 = canvas2d($('#cvHitsFx'));
+  const mtHp = $('#mtHp'), mtBar = $('#mtBar');
+  $('#mtFace').innerHTML = SKIN.faceSvg();
   let FF = 'Geist, sans-serif';
   const readFont = () => { FF = getComputedStyle(document.body).fontFamily; };
   readFont();
   if (document.fonts) document.fonts.ready.then(readFont);
-  let fx = [], nums = [], waves = [], flash = 0, hp = 20, lastHit = -10, nextAuto = 1, now = 0, shake = 0;
-  const hit = (x, y) => {
-    for (let i = 0; i < 24; i++) {
-      const a = Math.random() * Math.PI * 2, v = 90 + Math.random() * 230;
-      fx.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 50, life: 1, c: Math.random() < 0.5 ? '255,214,120' : '255,140,90' });
-    }
-    waves.push({ x, y, r: 6, life: 1 });
-    const dmg = 1 + Math.random() * 4;
-    nums.push({ x: x + (Math.random() - 0.5) * 24, y: y - 12, life: 1, text: '−' + dmg.toFixed(1).replace('.', ',') });
-    hp -= dmg; if (hp <= 0) hp = 20;
-    flash = 1; shake = 1; lastHit = now;
-  };
-  let geo = { cx: 0, cy: 0, s: 1 };
-  cv.addEventListener('pointerdown', e => {
-    const r = cv.getBoundingClientRect();
-    hit(e.clientX - r.left, e.clientY - r.top);
-  });
-  cv.style.cursor = 'crosshair';
-  const px = (ctx, x, y, w, h, c) => { ctx.fillStyle = c; ctx.fillRect(Math.round(x), Math.round(y), Math.ceil(w), Math.ceil(h)); };
-  loop(card, (t, dt) => {
-    now = t;
-    c2.begin();
-    const { ctx, w, h } = c2;
-    ctx.clearRect(0, 0, w, h);
-    const s = Math.max(3, Math.min(w, h) / 46);
-    geo = { cx: w / 2, cy: h * 0.64, s };
-    if (now - lastHit > 1.6 && now > nextAuto) { hit(geo.cx + (Math.random() - 0.5) * s * 6, geo.cy - s * 6 + (Math.random() - 0.5) * s * 4); nextAuto = now + 1.4; }
-    // пол и тень
-    const fl = ctx.createRadialGradient(geo.cx, geo.cy + s * 13, 0, geo.cx, geo.cy + s * 13, s * 16);
-    fl.addColorStop(0, 'rgba(120,150,255,.22)'); fl.addColorStop(1, 'rgba(120,150,255,0)');
-    ctx.fillStyle = fl; ctx.fillRect(0, 0, w, h);
-    // манекен из пикселей
-    const kx = Math.sin(now * 60) * shake * s * 0.35;
-    const x0 = geo.cx - s * 4 + kx, y0 = geo.cy - s * 14;
-    const skin = '#e3bc9a', hoodie = '#5b5bd6', hoodie2 = '#4646b8', pants = '#2b2f55', hair = '#3a2416';
-    px(ctx, x0, y0, s * 8, s * 8, skin);
-    px(ctx, x0, y0, s * 8, s * 2, hair);
-    px(ctx, x0 + s, y0 + s * 4, s, s, '#fff'); px(ctx, x0 + s * 2, y0 + s * 4, s, s, '#3b6fd6');
-    px(ctx, x0 + s * 5, y0 + s * 4, s, s, '#3b6fd6'); px(ctx, x0 + s * 6, y0 + s * 4, s, s, '#fff');
-    px(ctx, x0 + s * 3, y0 + s * 6, s * 2, s, '#a5674a');
-    px(ctx, x0, y0 + s * 8, s * 8, s * 12, hoodie);
-    px(ctx, x0 - s * 4, y0 + s * 8, s * 4, s * 12, hoodie2); px(ctx, x0 + s * 8, y0 + s * 8, s * 4, s * 12, hoodie2);
-    px(ctx, x0 - s * 4, y0 + s * 18, s * 4, s * 2, skin); px(ctx, x0 + s * 8, y0 + s * 18, s * 4, s * 2, skin);
-    px(ctx, x0, y0 + s * 20, s * 8, s * 7, pants);
-    if (flash > 0) { ctx.fillStyle = `rgba(255,50,60,${(flash * 0.5).toFixed(3)})`; ctx.fillRect(x0 - s * 4, y0, s * 16, s * 27); }
-    // мини-таргет над головой
-    const bw = s * 16, bx = geo.cx - bw / 2, by = y0 - s * 5.2;
-    ctx.fillStyle = 'rgba(14,16,28,.65)'; ctx.beginPath(); rr(ctx, bx - 8, by - 20, bw + 16, 34, 9); ctx.fill();
-    ctx.fillStyle = '#f3f5fa'; ctx.font = `600 12px ${FF}`; ctx.textBaseline = 'middle'; ctx.fillText('Stardust_', bx, by - 8);
+
+  let api = null, hp = 20, now = 0, lastHit = -10, nextAuto = 1.2;
+  let sparks = [], nums = [], waves = [];
+  const updateHud = () => {
     const f = Math.max(0, hp / 20);
-    ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fillRect(bx, by + 2, bw, 4);
-    ctx.fillStyle = f > 0.6 ? '#34d399' : f > 0.3 ? '#ffb44a' : '#ff5f66'; ctx.fillRect(bx, by + 2, bw * f, 4);
-    ctx.textAlign = 'right'; ctx.fillText(hp.toFixed(1), bx + bw, by - 8); ctx.textAlign = 'left';
-    // волны, искры, урон
+    const c = f > 0.6 ? ['#34d399', '#7ef0b0'] : f > 0.3 ? ['#ffb44a', '#ffd07a'] : ['#ff5f66', '#ff9aa0'];
+    mtHp.textContent = Math.max(0, hp).toFixed(1);
+    mtHp.style.color = c[0];
+    mtBar.style.width = (f * 100) + '%';
+    mtBar.style.background = `linear-gradient(90deg,${c[0]},${c[1]})`;
+    mtBar.style.boxShadow = `0 0 8px ${c[0]}`;
+  };
+  updateHud();
+  const burst = (x, y, gold) => {
+    const n = gold ? 48 : 24;
+    for (let i = 0; i < n; i++) {
+      const ang = Math.random() * Math.PI * 2, v = (gold ? 120 : 90) + Math.random() * (gold ? 260 : 230);
+      const c = gold ? (Math.random() < 0.5 ? '255,214,90' : '120,240,150') : (Math.random() < 0.5 ? '255,214,120' : '255,140,90');
+      sparks.push({ x, y, vx: Math.cos(ang) * v, vy: Math.sin(ang) * v - 60, life: 1, c, s: gold ? 3.5 : 3 });
+    }
+    waves.push({ x, y, r: 6, life: 1, c: gold ? '255,220,120' : '160,200,255' });
+  };
+  const hitAt = (sx, sy, crit) => {
+    const dmg = (1 + Math.random() * 4) * (crit ? 1.5 : 1);
+    hp -= dmg;
+    lastHit = now;
+    burst(sx, sy, false);
+    nums.push({ x: sx + (Math.random() - 0.5) * 20, y: sy - 14, life: 1, text: '−' + dmg.toFixed(1).replace('.', ','), crit });
+    if (api) api.hurt();
+    if (hp <= 0) {
+      hp = 20;
+      const c = api ? api.center() : [sx, sy];
+      burst(c[0], c[1], true);
+      nums.push({ x: c[0] - 32, y: c[1] - 40, life: 1.3, text: 'Тотем!', gold: true });
+      if (api) api.totem();
+    }
+    updateHud();
+  };
+  const drawFx = dt => {
+    fx2.begin();
+    const { ctx, w, h } = fx2;
+    ctx.clearRect(0, 0, w, h);
     ctx.globalCompositeOperation = 'lighter';
     for (const wv of waves) {
       wv.r += dt * 170; wv.life -= dt * 1.6;
-      ctx.strokeStyle = `rgba(160,200,255,${Math.max(0, wv.life * 0.7).toFixed(3)})`; ctx.lineWidth = 2 + wv.life * 4;
+      ctx.strokeStyle = `rgba(${wv.c},${Math.max(0, wv.life * 0.7).toFixed(3)})`;
+      ctx.lineWidth = 2 + Math.max(0, wv.life) * 4;
       ctx.beginPath(); ctx.arc(wv.x, wv.y, wv.r, 0, Math.PI * 2); ctx.stroke();
     }
-    for (const p of fx) {
-      p.vy += 420 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt * 1.5;
-      ctx.fillStyle = `rgba(${p.c},${Math.max(0, p.life).toFixed(3)})`; ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3);
+    for (const p of sparks) {
+      p.vy += 420 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt * 1.4;
+      ctx.fillStyle = `rgba(${p.c},${Math.max(0, p.life).toFixed(3)})`;
+      ctx.fillRect(p.x - p.s / 2, p.y - p.s / 2, p.s, p.s);
     }
     ctx.globalCompositeOperation = 'source-over';
+    ctx.textBaseline = 'middle';
     for (const n of nums) {
       n.y -= dt * 46; n.life -= dt * 0.9;
-      ctx.fillStyle = `rgba(255,120,120,${Math.max(0, n.life).toFixed(3)})`;
-      ctx.font = `700 ${Math.round(16 + 6 * (1 - n.life))}px ${FF}`;
+      const al = Math.max(0, Math.min(1, n.life));
+      ctx.fillStyle = n.gold ? `rgba(255,214,90,${al.toFixed(3)})` : `rgba(255,${n.crit ? 86 : 122},${n.crit ? 86 : 122},${al.toFixed(3)})`;
+      ctx.font = `700 ${Math.round((n.gold ? 20 : 16) + 6 * (1 - al))}px ${FF}`;
       ctx.fillText(n.text, n.x, n.y);
     }
-    waves = waves.filter(x => x.life > 0); fx = fx.filter(x => x.life > 0); nums = nums.filter(x => x.life > 0);
-    flash = Math.max(0, flash - dt * 3.5); shake = Math.max(0, shake - dt * 5);
-  });
-});
-function rr(ctx, x, y, w, h, r) { ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
-
-/* ═══════════ карточка: атмосфера ═══════════ */
-safe('atmo', () => {
-  const cv = $('#cvAtmo'); const card = cv.closest('.card');
-  const c2 = canvas2d(cv);
-  let hills = null, sprite = null, snow = [], flies = [];
-  const build = (w, h) => {
-    const d = c2.d;
-    hills = document.createElement('canvas'); hills.width = Math.round(w * d); hills.height = Math.round(h * d);
-    const g = hills.getContext('2d'); g.setTransform(d, 0, 0, d, 0, 0);
-    const b = Math.max(5, Math.round(h / 34));
-    for (let x = 0; x < w + b; x += b) {
-      const n = 0.5 + 0.25 * Math.sin(x / w * 7.1 + 1.3) + 0.15 * Math.sin(x / w * 15.7) + 0.1 * Math.sin(x / w * 29.3 + 2);
-      const y = Math.round((h * 0.7 - n * h * 0.2) / b) * b;
-      g.fillStyle = '#03050d'; g.fillRect(x, y, b + 0.5, h - y);
-      g.fillStyle = 'rgba(30,45,95,.55)'; g.fillRect(x, y + b, b + 0.5, b * 0.6);
-      g.fillStyle = '#eaf2ff'; g.fillRect(x, y, b + 0.5, Math.max(2, b * 0.5));
-      g.fillStyle = 'rgba(200,220,255,.45)'; g.fillRect(x, y + b * 0.5, b + 0.5, b * 0.3);
-    }
-    sprite = document.createElement('canvas'); sprite.width = 4; sprite.height = 128;
-    const sg = sprite.getContext('2d'); const gr = sg.createLinearGradient(0, 0, 0, 128);
-    gr.addColorStop(0, 'rgba(120,255,200,0)'); gr.addColorStop(0.55, 'rgba(110,255,190,.5)'); gr.addColorStop(0.8, 'rgba(120,170,255,.35)'); gr.addColorStop(1, 'rgba(160,110,255,0)');
-    sg.fillStyle = gr; sg.fillRect(0, 0, 4, 128);
-    snow = Array.from({ length: 70 }, () => ({ x: Math.random() * w, y: Math.random() * h, r: 0.6 + Math.random() * 1.6, v: 14 + Math.random() * 26, ph: Math.random() * 6 }));
-    flies = Array.from({ length: 12 }, () => ({ x: Math.random() * w, y: h * (0.55 + Math.random() * 0.35), ph: Math.random() * 6, sp: 0.4 + Math.random() * 0.8 }));
+    waves = waves.filter(x => x.life > 0); sparks = sparks.filter(x => x.life > 0); nums = nums.filter(x => x.life > 0);
   };
+
+  // three.js — только когда карточка близко: первый экран от него не тяжелеет.
+  const near = new IntersectionObserver(es => {
+    if (!es.some(e => e.isIntersecting)) return;
+    near.disconnect();
+    loadThree().then(THREE => { api = player3d(THREE); }).catch(e => { console.warn(e); api = player2d(); });
+  }, { rootMargin: '700px' });
+  near.observe(box);
+
+  box.addEventListener('pointerdown', e => {
+    if (!api) return;
+    const r = box.getBoundingClientRect();
+    const sx = e.clientX - r.left, sy = e.clientY - r.top;
+    if (api.pick(sx, sy)) hitAt(sx, sy, Math.random() < 0.25);
+  });
+
+  loop(box, (t, dt) => {
+    now = t;
+    if (!api) return;
+    if (!reduce && t - lastHit > 2.4 && t > nextAuto) {
+      const p = api.randomPoint();
+      hitAt(p[0], p[1], false);
+      nextAuto = t + 1.7;
+    }
+    api.frame(t, dt);
+    drawFx(dt);
+  });
+
+  function player3d(THREE) {
+    const renderer = new THREE.WebGLRenderer({ canvas: cv3, antialias: true, alpha: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 50);
+    scene.add(new THREE.HemisphereLight(0xc4d6ff, 0x1a1430, 0.7));
+    const key = new THREE.DirectionalLight(0xfff0de, 1.35);
+    key.position.set(2.2, 4.4, 3.4);
+    key.castShadow = true;
+    key.shadow.mapSize.set(1024, 1024);
+    Object.assign(key.shadow.camera, { near: 0.5, far: 14, left: -2, right: 2, top: 3, bottom: -1 });
+    key.shadow.radius = 5;
+    key.shadow.bias = -0.0005;
+    scene.add(key);
+    const rimA = new THREE.DirectionalLight(0x6aa8ff, 1.3); rimA.position.set(-3, 2.6, -3); scene.add(rimA);
+    const rimB = new THREE.DirectionalLight(0xb08cff, 0.75); rimB.position.set(3, 1.6, -2.6); scene.add(rimB);
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(10, 10), new THREE.ShadowMaterial({ opacity: 0.42 }));
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    const P = 1 / 16;
+    const mats = [];
+    const texOf = grid => {
+      const h = grid.length, w = grid[0].length;
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const g = c.getContext('2d');
+      grid.forEach((row, y) => row.forEach((col, x) => { g.fillStyle = col; g.fillRect(x, y, 1, 1); }));
+      const t = new THREE.CanvasTexture(c);
+      t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
+      t.encoding = THREE.sRGBEncoding;
+      return t;
+    };
+    const part = (w, h, d, faces) => {
+      const list = ['right', 'left', 'top', 'bottom', 'front', 'back'].map(k => {
+        const m = new THREE.MeshStandardMaterial({ map: texOf(faces[k]), roughness: 0.82, metalness: 0, emissive: new THREE.Color(0xff1e1e), emissiveIntensity: 0 });
+        mats.push(m);
+        return m;
+      });
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w * P, h * P, d * P), list);
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      return mesh;
+    };
+    const player = new THREE.Group();
+    scene.add(player);
+    const headPivot = new THREE.Group(); headPivot.position.y = 24 * P; player.add(headPivot);
+    const head = part(8, 8, 8, SKIN.head); head.position.y = 4 * P; headPivot.add(head);
+    const body = part(8, 12, 4, SKIN.body); body.position.y = 18 * P; player.add(body);
+    const limb = (x, y, faces, dy) => {
+      const g = new THREE.Group(); g.position.set(x * P, y * P, 0);
+      const m = part(4, 12, 4, faces); m.position.y = dy * P; g.add(m);
+      player.add(g);
+      return [g, m];
+    };
+    const [armL, armLm] = limb(6, 22, SKIN.arm, -4);
+    const [armR, armRm] = limb(-6, 22, SKIN.arm, -4);
+    const [, legLm] = limb(2, 12, SKIN.leg, -6);
+    const [, legRm] = limb(-2, 12, SKIN.leg, -6);
+    const meshes = [head, body, armLm, armRm, legLm, legRm];
+    const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), v = new THREE.Vector3();
+    let lw = 0, lh = 0, hurt = 0, kb = 0, totemT = 0, yaw = 0, lookX = 0, lookY = 0, pointerIn = false, px = 0, py = 0;
+    box.addEventListener('pointermove', e => {
+      const r = box.getBoundingClientRect();
+      px = (e.clientX - r.left) / r.width * 2 - 1; py = (e.clientY - r.top) / r.height * 2 - 1;
+      pointerIn = true;
+    });
+    box.addEventListener('pointerleave', () => { pointerIn = false; });
+    const resize = () => {
+      const w = box.clientWidth, h = box.clientHeight;
+      if (w === lw && h === lh) return;
+      lw = w; lh = h;
+      renderer.setSize(w, h, false);
+      camera.aspect = w / Math.max(1, h);
+      const dist = 5.9 * Math.max(1, 1.15 / camera.aspect);
+      camera.position.set(0, 1.45, dist);
+      camera.lookAt(0, 1.34, 0);
+      camera.updateProjectionMatrix();
+    };
+    const toScreen = p => { v.copy(p).project(camera); return [(v.x + 1) / 2 * lw, (1 - v.y) / 2 * lh]; };
+    resize();
+    return {
+      pick(sx, sy) {
+        ndc.set(sx / lw * 2 - 1, -(sy / lh * 2 - 1));
+        ray.setFromCamera(ndc, camera);
+        return ray.intersectObjects(meshes, false).length > 0;
+      },
+      randomPoint() {
+        const m = meshes[Math.floor(Math.random() * 3)];
+        m.getWorldPosition(v);
+        v.x += (Math.random() - 0.5) * 0.2; v.y += (Math.random() - 0.5) * 0.25;
+        return toScreen(v);
+      },
+      center() { body.getWorldPosition(v); return toScreen(v); },
+      hurt() { hurt = 1; kb = 1; },
+      totem() { totemT = 1; },
+      frame(t, dt) {
+        resize();
+        const tx = pointerIn ? px : Math.sin(t * 0.45) * 0.6;
+        const ty = pointerIn ? py : 0;
+        yaw += ((pointerIn ? px * 0.55 : Math.sin(t * 0.45) * 0.5) - yaw) * Math.min(1, dt * 3);
+        lookX += (tx - lookX) * Math.min(1, dt * 5);
+        lookY += (ty - lookY) * Math.min(1, dt * 5);
+        player.rotation.y = yaw;
+        headPivot.rotation.y = lookX * 0.45;
+        headPivot.rotation.x = lookY * 0.3;
+        const sw = Math.sin(t * 1.7) * 0.07;
+        armL.rotation.x = sw; armR.rotation.x = -sw;
+        armL.rotation.z = 0.05 + Math.sin(t * 1.2) * 0.02;
+        armR.rotation.z = -0.05 - Math.sin(t * 1.2) * 0.02;
+        // Удар: модель краснеет сама (а не прямоугольник вокруг неё), её отбрасывает назад.
+        hurt = Math.max(0, hurt - dt * 2.4);
+        kb = Math.max(0, kb - dt * 3.0);
+        totemT = Math.max(0, totemT - dt * 1.2);
+        const k = kb * kb;
+        player.position.z = -0.32 * k;
+        player.rotation.x = -0.16 * k;
+        player.position.y = Math.sin(totemT * Math.PI) * 0.18;
+        // Как в игре: текстура уходит в красный (зелёный и синий гаснут), а не
+        // засвечивается розовым.
+        for (const m of mats) { m.emissiveIntensity = hurt * 0.38; m.color.setRGB(1, 1 - hurt * 0.7, 1 - hurt * 0.7); }
+        key.color.setHex(totemT > 0.01 ? 0xffe6a8 : 0xfff0de);
+        renderer.render(scene, camera);
+      },
+    };
+  }
+
+  function player2d() {
+    // Запасной вариант без WebGL: плоский манекен; краснеют его части, а не прямоугольник вокруг.
+    const ctx = cv3.getContext('2d');
+    let hurt = 0, lw = 1, lh = 1;
+    const parts = () => {
+      const s = Math.max(3, Math.min(lw, lh) / 46), cx = lw / 2, cy = lh * 0.66, x0 = cx - s * 4, y0 = cy - s * 14;
+      return { s, list: [[x0, y0, 8, 8, '#e2b493'], [x0, y0 + s * 8, 8, 12, '#272b55'], [x0 - s * 4, y0 + s * 8, 4, 12, '#23274d'],
+        [x0 + s * 8, y0 + s * 8, 4, 12, '#23274d'], [x0, y0 + s * 20, 8, 7, '#2c3047']] };
+    };
+    return {
+      pick(sx, sy) { const { s, list } = parts(); return list.some(([x, y, w, h]) => sx >= x && sx <= x + w * s && sy >= y && sy <= y + h * s); },
+      randomPoint() { return [lw / 2 + (Math.random() - 0.5) * 30, lh * 0.5]; },
+      center() { return [lw / 2, lh * 0.5]; },
+      hurt() { hurt = 1; },
+      totem() {},
+      frame(t, dt) {
+        const r = cv3.getBoundingClientRect(), d = Math.min(devicePixelRatio || 1, 2);
+        if (Math.round(r.width * d) !== cv3.width || Math.round(r.height * d) !== cv3.height) { cv3.width = Math.round(r.width * d); cv3.height = Math.round(r.height * d); }
+        lw = r.width; lh = r.height;
+        ctx.setTransform(d, 0, 0, d, 0, 0);
+        ctx.clearRect(0, 0, lw, lh);
+        hurt = Math.max(0, hurt - dt * 2.4);
+        const { s, list } = parts();
+        for (const [x, y, w, h, c] of list) {
+          ctx.fillStyle = c; ctx.fillRect(x, y, w * s, h * s);
+          if (hurt > 0) { ctx.fillStyle = `rgba(255,40,40,${(hurt * 0.55).toFixed(3)})`; ctx.fillRect(x, y, w * s, h * s); }
+        }
+      },
+    };
+  }
+});
+
+/* ═══════════ карточка: атмосфера — ночь в горах ═══════════ */
+safe('atmo', () => {
+  const cv = $('#cvAtmo');
+  const card = cv.closest('.card');
+  cv.style.background = 'linear-gradient(180deg,#0a1230 0%,#123050 52%,#1d3149 64%,#0b1322 100%)';
+  // Шейдеры ночи собираются, только когда до карточки остаётся пара экранов, —
+  // чтобы не отнимать время у заката за HUD на первом экране.
+  let land = null;
+  new IntersectionObserver((es, io) => {
+    if (!es.some(e => e.isIntersecting)) return;
+    io.disconnect();
+    land = Landscape(cv, false);
+    if (!land) return;
+    new ResizeObserver(() => land.resize()).observe(cv);
+  }, { rootMargin: '1600px' }).observe(cv);
+  let mx = 0, my = 0, tx = 0, ty = 0;
+  card.addEventListener('pointermove', e => {
+    const r = card.getBoundingClientRect();
+    tx = (e.clientX - r.left) / r.width * 2 - 1;
+    ty = (e.clientY - r.top) / r.height * 2 - 1;
+  });
+  card.addEventListener('pointerleave', () => { tx = 0; ty = 0; });
   loop(card, (t, dt) => {
-    const changed = c2.begin();
-    const { ctx, w, h } = c2;
-    if (changed || !hills) build(w, h);
-    const sky = ctx.createLinearGradient(0, 0, 0, h);
-    sky.addColorStop(0, '#050816'); sky.addColorStop(0.6, '#0d1a44'); sky.addColorStop(1, '#16275a');
-    ctx.fillStyle = sky; ctx.fillRect(0, 0, w, h);
-    // луна
-    const mx = w * 0.78, my = h * 0.2;
-    const mg = ctx.createRadialGradient(mx, my, 0, mx, my, 60);
-    mg.addColorStop(0, 'rgba(220,230,255,.35)'); mg.addColorStop(1, 'rgba(220,230,255,0)');
-    ctx.fillStyle = mg; ctx.fillRect(mx - 60, my - 60, 120, 120);
-    ctx.fillStyle = '#eef3ff'; ctx.beginPath(); ctx.arc(mx, my, 13, 0, Math.PI * 2); ctx.fill();
-    // северное сияние
-    ctx.globalCompositeOperation = 'lighter';
-    for (let band = 0; band < 3; band++) {
-      for (let x = -10; x < w + 10; x += 4) {
-        const yy = h * (0.18 + band * 0.07) + Math.sin(x * 0.012 + t * (0.5 + band * 0.2) + band * 2) * 18 + Math.sin(x * 0.031 - t * 0.7) * 8;
-        const hh = 70 + 30 * Math.sin(x * 0.02 + t + band);
-        ctx.globalAlpha = 0.18 + 0.12 * Math.sin(x * 0.015 + t * 1.3 + band);
-        ctx.drawImage(sprite, x, yy - hh * 0.7, 5, hh);
-      }
-    }
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.drawImage(hills, 0, 0, w, h);
-    // снег
-    ctx.fillStyle = 'rgba(255,255,255,.85)';
-    for (const f of snow) {
-      f.y += f.v * dt; f.x += Math.sin(t + f.ph) * 8 * dt;
-      if (f.y > h) { f.y = -4; f.x = Math.random() * w; }
-      ctx.globalAlpha = 0.5 + 0.5 * (f.r / 2.2);
-      ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-    // светлячки
-    ctx.globalCompositeOperation = 'lighter';
-    for (const f of flies) {
-      const x = f.x + Math.sin(t * f.sp + f.ph) * 22, y = f.y + Math.cos(t * f.sp * 1.3 + f.ph) * 12;
-      const a = 0.4 + 0.6 * Math.max(0, Math.sin(t * 2 * f.sp + f.ph * 3));
-      const g = ctx.createRadialGradient(x, y, 0, x, y, 12);
-      g.addColorStop(0, `rgba(255,236,150,${a.toFixed(3)})`); g.addColorStop(1, 'rgba(255,220,120,0)');
-      ctx.fillStyle = g; ctx.fillRect(x - 12, y - 12, 24, 24);
-    }
-    ctx.globalCompositeOperation = 'source-over';
+    if (!land) return;
+    mx += (tx - mx) * Math.min(1, dt * 3);
+    my += (ty - my) * Math.min(1, dt * 3);
+    land.frame(t, mx, my, reduce);
   });
 });
 
@@ -1059,11 +1650,11 @@ safe('orbit', () => {
 safe('fps', () => {
   const card = $('#fpsChart').closest('.card');
   const num = $('#fpsNum'), line = $('#fpsLine'), area = $('#fpsArea'), btn = $('#optBtn'), sw = $('#optSw');
-  let on = false, val = 148, acc = 0;
-  const pts = Array.from({ length: 48 }, (_, i) => 148 + Math.sin(i * 0.6) * 9 + Math.random() * 6);
+  let on = false, val = 536, acc = 0;
+  const pts = Array.from({ length: 48 }, (_, i) => 536 + Math.sin(i * 0.6) * 14 + Math.random() * 10);
   btn.addEventListener('click', () => { on = !on; sw.classList.toggle('on', on); btn.setAttribute('aria-checked', String(on)); });
   const drawChart = () => {
-    const W = 400, H = 130, lo = 90, hi = 270;
+    const W = 400, H = 130, lo = 380, hi = 960;
     const p = pts.map((v, i) => [i / (pts.length - 1) * W, H - (v - lo) / (hi - lo) * H]);
     let d = `M${p[0][0].toFixed(1)} ${p[0][1].toFixed(1)}`;
     for (let i = 1; i < p.length; i++) {
@@ -1076,13 +1667,15 @@ safe('fps', () => {
   };
   drawChart();
   loop(card, (t, dt) => {
-    const target = on ? 240 : 148;
+    // Без Optimizer — от 500, с ним — за 800.
+    const target = on ? 846 : 538;
     acc += dt;
     if (acc > 0.12) {
       acc = 0;
       const last = pts[pts.length - 1];
       pts.shift();
-      pts.push(lerp(last, target + (Math.random() - 0.5) * (on ? 14 : 26), 0.35));
+      const next = lerp(last, target + (Math.random() - 0.5) * (on ? 60 : 50), 0.35);
+      pts.push(Math.max(on && last > 790 ? 802 : 503, next));
       drawChart();
     }
     val += (pts[pts.length - 1] - val) * Math.min(1, dt * 6);

@@ -22,6 +22,7 @@
   --line:rgba(255,255,255,.07); --line-2:rgba(255,255,255,.12);
   --blue:#4d8dff; --blue-2:#0a66ff; --violet:#9b7bff; --cyan:#4fd1ff; --pink:#ff7ac0;
   --acc:77 141 255;
+  --ga:.42; --gb:18px;
   --serif:"Cormorant","Times New Roman",serif;
   --sans:"Geist","Segoe UI",system-ui,-apple-system,sans-serif;
   --wrap:1200px; --g:24px;
@@ -284,6 +285,16 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border:0;border-radiu
 .sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.4);transition:left .35s var(--spring)}
 .sw.on{background:#34c759}
 .sw.on::after{left:16px}
+
+/* удары: 3D-игрок */
+.hit3d{cursor:crosshair;background:radial-gradient(ellipse 55% 20% at 50% 88%,rgba(110,150,255,.2),transparent 70%)}
+.hit3d #cvHitsFx{pointer-events:none;z-index:2}
+.mini-target{position:absolute;left:16px;top:16px;z-index:3;display:flex;align-items:center;gap:10px;padding:8px 12px 8px 8px;width:212px}
+.mini-target .face{width:32px;height:32px;border-radius:9px}
+.mt-mid{flex:1;min-width:0}
+.mt-mid .name{font-weight:600;font-size:13px}
+.mini-target .hbar{margin-top:6px;height:5px}
+.mini-target .hpv{font-size:16px;font-weight:700;transition:color .4s}
 
 /* орбита гардероба */
 .vis-orbit{display:grid;place-items:center}
@@ -554,12 +565,16 @@ footer{position:relative;padding:20px 0 50px}
         <div class="txt"><h3>Трейлы</h3><p>След за игроками и снарядами — плавный и светящийся. Поводи курсором по карточке.</p></div>
       </article>
       <article class="card s4" data-r>
-        <div class="vis"><canvas id="cvHits" aria-label="Манекен для ударов" role="img"></canvas></div>
-        <div class="txt"><h3>Эффекты ударов</h3><p>Искры, волна и всплывающий урон. Кликни по манекену.</p></div>
+        <div class="vis hit3d" id="hit3d">
+          <canvas id="cvHits3d" aria-label="3D-модель игрока, по которой можно бить" role="img"></canvas>
+          <canvas id="cvHitsFx" aria-hidden="true"></canvas>
+          <div class="hp mini-target rim" aria-hidden="true"><div class="face" id="mtFace"></div><div class="mt-mid"><div class="name">Stardust_</div><div class="hbar"><b id="mtBar"></b></div></div><b class="hpv num" id="mtHp">20.0</b></div>
+        </div>
+        <div class="txt"><h3>Эффекты ударов</h3><p>Искры, волна, всплывающий урон и тотем. Кликни по игроку.</p></div>
       </article>
       <article class="card s4" data-r style="--d:.08s">
         <div class="vis"><canvas id="cvAtmo" aria-hidden="true"></canvas></div>
-        <div class="txt"><h3>Атмосфера</h3><p>Своё небо, северное сияние, снег на блоках и светлячки.</p></div>
+        <div class="txt"><h3>Атмосфера</h3><p>Своё небо, северное сияние, снегопад и туман в долинах — мир вокруг оживает.</p></div>
       </article>
       <article class="card s4 wide-sm" data-r style="--d:.16s">
         <div class="vis vis-orbit" id="orbit"><div class="orb-ring"></div><div class="avatar" id="orbAvatar"></div></div>
@@ -568,7 +583,7 @@ footer{position:relative;padding:20px 0 50px}
       <article class="card s5 wide-sm" data-r>
         <div class="vis vis-fps">
           <div class="fps-top">
-            <div class="fps-num"><b id="fpsNum">148</b><span>кадров в секунду</span></div>
+            <div class="fps-num"><b id="fpsNum">536</b><span>кадров в секунду</span></div>
             <button class="opt" id="optBtn" role="switch" aria-checked="false">Optimizer <i class="sw" id="optSw"></i></button>
           </div>
           <svg class="fps-chart" id="fpsChart" viewBox="0 0 400 130" preserveAspectRatio="none" aria-hidden="true">
